@@ -1,0 +1,10 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+saida/
+cache/
+
+# Dados gerados (volume de vendas real — nao versionar)
+relatorio_mensal_*.xlsx
+evolucao_de_vendas.xlsx

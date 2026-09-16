@@ -1,0 +1,4 @@
+python-amazon-sp-api>=2.1.23
+openpyxl>=3.1.5
+cryptography>=50.0.1
+httpx>=0.27
