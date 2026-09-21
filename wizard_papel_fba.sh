@@ -202,11 +202,11 @@ note "Também podem aparecer 'FBA Inventory Planning' e 'AFN Inventory' — marq
 pause "Aplicou e clicou em salvar? Enter para validar."
 
 stage "Validar acesso"
-say "Rodamos o auditor para conferir que o 403 sumiu e o dashboard ganhou estoque por quantidade."
-confirm "Rodar .venv/bin/python auditar.py agora?" && {
-  .venv/bin/python auditar.py
-  printf '\n  Tudo certo se as linhas AFN/FBA_Inventory passaram a mostrar OK.\n'
+say "Rodamos o probe AFN real para conferir que o 403 sumiu (o auditar.py não toca a API)."
+confirm "Rodar .venv/bin/python inventario.py --report afn agora?" && {
+  .venv/bin/python inventario.py --report afn
+  printf '\n  Tudo certo se NAO houver mais "403 / Forbidden".\n'
 }
-say "Deu problema? Feche com Ctrl-C e depois replique este wizard."
+say "Ainda 403? O papel salvou mas pode demorar minutos para propagar; re-consinta o app e rode de novo. Feche com Ctrl-C e replique este wizard."
 
 finish
