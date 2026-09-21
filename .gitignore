@@ -8,3 +8,5 @@ cache/
 # Dados gerados (volume de vendas real — nao versionar)
 relatorio_mensal_*.xlsx
 evolucao_de_vendas.xlsx
+# Dashboard com dados reais (nao versionar)
+analytics.html

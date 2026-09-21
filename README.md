@@ -7,6 +7,8 @@ Amazon via **SP-API** (Seller Partner API) e gerar planilhas XLSX.
 |--------|-----------|
 | `inventario.py` | Baixa inventário/vendas da Amazon e gera o relatório mensal XLSX |
 | `evolucao.py`   | Lê todos os `relatorio_mensal_*.xlsx` e gera a evolução de vendas com gráficos |
+| `dashboard.py`  | Lê os caches e gera `analytics.html` (dashboard Chart.js, sem servidor) |
+| `coleta_mensal.sh` | Roda `--mensal` + `dashboard.py` de forma agendada (systemd timer) |
 
 ## Requisitos
 
@@ -161,6 +163,30 @@ A planilha contém:
 
 Para incluir um novo mês: rode `inventario.py --mensal --start ... --end ...`
 e depois `evolucao.py` de novo (ele lê o novo arquivo automaticamente).
+
+## Dashboard de analytics
+
+Lê os caches e gera um **dashboard HTML estático** (Chart.js, via CDN — não
+precisa de servidor, abre direto no navegador):
+
+```bash
+.venv/bin/python dashboard.py --out analytics.html
+```
+
+Painéis incluídos:
+
+- **Faturamento/pedidos/unidades/meses cobertos/ticket médio/best mês** (cards)
+- **Evolução do faturamento** por mês (barras)
+- **Pedidos × unidades** por mês (barras + linha)
+- **Top 10 SKUs** por faturamento (barras horizontais)
+- **Taxas Amazon por tipo** (soma dos settlements — negativos = custo)
+- **Estoque/catálogo corrente** (top SKUs ativos por preço)
+
+> Regra de estoque: o relatório de listagens (`GET_MERCHANT_LISTINGS_ALL_DATA`)
+> **não traz a coluna `quantity`** (vem vazia). Quantidade real exige os
+> relatórios FBA (`AFN`/`MYI`/`Reservado`), que no seu papel SP-API retornam
+> 403 — então o dashboard mostra o **catálogo por preço** quando a quantidade
+> não está disponível.
 
 ## Observações
 

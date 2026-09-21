@@ -5,7 +5,8 @@ Scripts Python para coletar inventário e volume de vendas da Amazon via SP-API 
 ## Como executar
 
 - Use sempre o venv: `.venv/bin/python`, nunca `python`.
-- Comandos prontos no `README.md` (parte de referência deste doc).
+- Comandos prontos no `README.md`; mas há subcomandos que o README documenta **fora
+  de ordem** — confira a tabela `--report` antes de inventar um papel.
 - Rodou coisa nova? Confirme o arquivo XLSX gerado existe e abre (`--out` padrão imprime o caminho).
 
 ## Convenções que o README não confessa
