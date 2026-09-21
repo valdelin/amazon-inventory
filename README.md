@@ -9,6 +9,8 @@ Amazon via **SP-API** (Seller Partner API) e gerar planilhas XLSX.
 | `evolucao.py`   | Lê todos os `relatorio_mensal_*.xlsx` e gera a evolução de vendas com gráficos |
 | `dashboard.py`  | Lê os caches e gera `analytics.html` (dashboard Chart.js, sem servidor) |
 | `coleta_mensal.sh` | Roda `--mensal` + `dashboard.py` de forma agendada (systemd timer) |
+| `coleta_diaria.sh`  | Coleta o mês corrente até hoje, todo dia 06:15 (timer systemd user `amazon-inventory-diario`) |
+| `coleta_semanal.sh` | Regenera o dashboard (snapshot semanal, sem xlsx), seg 06:30 (timer `amazon-inventory-semanal`) |
 
 ## Requisitos
 
