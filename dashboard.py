@@ -305,13 +305,15 @@ def main():
     all_settlements = [s for m in data for s in m["settlements"]]
     fees = fee_breakdown(all_settlements)
     # top SKUs (ASIN agregado)
-    top_by_asin = defaultdict(lambda: {"sku": "", "titulo": "", "total": 0.0})
+    top_by_asin = defaultdict(
+        lambda: {"sku": "", "titulo": "", "unidades": 0.0, "total": 0.0})
     for m in data:
         for p in m["products"]:
             key = p[1] or p[0]
             t = top_by_asin[key]
             t["sku"] = t["sku"] or p[0]
             t["titulo"] = t["titulo"] or p[2]
+            t["unidades"] += p[3]
             t["total"] += p[5]
     top_10 = sorted(top_by_asin.values(), key=lambda v: -v["total"])[:10]
     top_skus_labels = [t["sku"] or (t["titulo"] or "")[:12] for t in top_10]
@@ -360,3 +362,31 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def gerar_planilha_custos(caches):
+    """Exporta nao-destrutivo: inventario (SKU/ASIN/Titulo/Unidades/Pedidos/Total) + coluna
+    'Custo unitario (R$) -- preencher' VAZIA, em cache/planilha_inventario_custos.xlsx.
+    Voce preenche os custos; o dashboard le de volta p/ margem."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    months, data = consolidate([str(c) for c in caches])
+    from collections import defaultdict
+    agr = defaultdict(lambda: {"sku":"","asin":"","titulo":"","unidades":0,"pedidos":0,"total":0.0})
+    for m in data:
+        for p in m.get("products", []):
+            key = p[0].strip() or p[1].strip()
+            d = agr[key]
+            d["sku"] = d["sku"] or p[0]; d["asin"] = d["asin"] or p[1]
+            d["titulo"] = d["titulo"] or p[2]; d["unidades"] += int(p[3])
+            d["pedidos"] += int(p[4]); d["total"] += float(p[5])
+    wb = Workbook(); ws = wb.active; ws.title = "Inventario"
+    hdr = ["SKU","ASIN","Titulo","Unidades","Pedidos","Total (R$)","Custo unitario (R$) -- preencher"]
+    ws.append(hdr)
+    for c in ws[1]:
+        c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="DDEEFF")
+        c.alignment = Alignment(horizontal="center")
+    for sku in sorted(agr, key=lambda s: -agr[s]["total"]):
+        d = agr[sku]
+        ws.append([d["sku"], d["asin"], d["titulo"], d["unidades"], d["pedidos"], round(d["total"],2), None])
+    out = CACHE_DIR / "planilha_inventario_custos.xlsx"
+    wb.save(out); return out

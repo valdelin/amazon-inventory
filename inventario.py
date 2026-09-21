@@ -954,6 +954,77 @@ def mensal_default_output(end):
 historico_default_output = mensal_default_output
 
 
+CADASTRO_FILENAME = "cadastro_custo.csv"
+
+
+def cadastro_path():
+    return CACHE_DIR / CADASTRO_FILENAME
+
+
+def load_cadastro():
+    """{sku: custo_unitario} a partir do CSV de cadastro (dado seu; fora do git)."""
+    path = cadastro_path()
+    cadastro = {}
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or ";" not in line:
+                continue
+            sku, _, custo_txt = line.partition(";")
+            try:
+                cadastro[sku.strip()] = float(custo_txt.strip().replace(",", "."))
+            except ValueError:
+                log.warning("Cadastro: custo inválido para %r: %r", sku, custo_txt)
+    return cadastro
+
+
+def run_cadastro(args):
+    """CRUD do cadastro de custo unitário (cache/cadastro_custo.csv — dado seu, fora do git).
+
+    --cadastro                       lista SKUs com custo cadastrado
+    --cadastro-cost SKU VALOR        grava/atualiza o custo unitário do SKU
+    """
+    cadastro = {}
+    if cadastro_path().is_file():
+        for line in cadastro_path().read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or ";" not in line:
+                continue
+            sku, _, custo = line.partition(";")
+            try:
+                cadastro[sku.strip()] = float(custo.strip().replace(",", "."))
+            except ValueError:
+                log.warning("Custo inválido ignorado: %r", line)
+
+    if args.cadastro_cost:
+        sku, valor_txt = args.cadastro_cost
+        try:
+            custo = float(valor_txt.strip().replace(",", "."))
+        except ValueError:
+            print(f"Custo inválido: {valor_txt!r} (use número, ex.: 45.90)")
+            return 1
+        cadastro[sku.strip()] = custo
+        CACHE_DIR.mkdir(exist_ok=True)
+        cadastro_path().write_text(
+            "\n".join(f"{s};{c:.2f}" for s, c in sorted(cadastro.items())) + "\n",
+            encoding="utf-8",
+        )
+        log.info("Custo de %s atualizado: R$ %.2f", sku.strip(), custo)
+        return 0
+
+    if not cadastro:
+        print(f"Cadastro de custo vazio — cadastre com: --cadastro-cost SKU VALOR")
+        print(f"Arquivo: {cadastro_path()}")
+        return 0
+
+    print(f"Cadastro de custo unitário ({len(cadastro)} SKUs) — {cadastro_path()}")
+    print(f"{'SKU':<32} {'Custo unitário':>15}")
+    print("-" * 50)
+    for sku in sorted(cadastro):
+            print(f"{sku:<30} R$ {cadastro[sku]:.2f}".replace(".", "."))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Coleta o inventário da Amazon (SP-API) para XLSX")
     parser.add_argument("--out", help="Arquivo XLSX de saída")
@@ -969,6 +1040,10 @@ def main():
                         help="Report type SP-API bruto (avançado)")
     parser.add_argument("--start", help="Data inicial (YYYY-MM-DD) para relatórios de pedidos")
     parser.add_argument("--end", help="Data final (YYYY-MM-DD) para relatórios de pedidos")
+    parser.add_argument("--cadastro", action="store_true",
+                        help="Lista o cadastro de custo unitário por SKU (cache/cadastro_custo.csv)")
+    parser.add_argument("--cadastro-cost", nargs=2, metavar=("SKU", "VALOR"),
+                        help="Grava/atualiza o custo unitário do SKU (dado seu; fora do git)")
     parser.add_argument("--timeout-min", type=int, default=30,
                         help="Tempo máximo de espera do relatório (min)")
     parser.add_argument("--verbose", action="store_true")
@@ -986,6 +1061,10 @@ def main():
     private_key = None
     if os.environ.get("SP_API_PRIVATE_KEY"):
         private_key = load_private_key(os.environ["SP_API_PRIVATE_KEY"])
+
+    if args.cadastro or args.cadastro_cost:
+        run_cadastro(args)
+        return
 
     if args.historico:
         start, end = resolve_window(args.start, args.end)
