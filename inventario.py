@@ -72,6 +72,18 @@ DATA_KIOSK_REPORT_TYPES = {
 }
 ORDER_TYPE_MONTHLY = "GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL"
 ORDER_TYPE_ARCHIVED = "GET_FLAT_FILE_ARCHIVED_ORDERS_DATA_BY_ORDER_DATE"
+SETTLEMENT_TYPE = "GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE_V2"
+SETTLEMENT_FEE_LABELS = {
+    "Commission": "Taxa Comissão (referral)",
+    "FBAPerUnitFulfillmentFee": "Taxa FBA (por unidade)",
+    "FBAWeightBasedFee": "Taxa FBA (peso)",
+    "FBAShippingFee": "Taxa FBA (frete)",
+    "Flexible Customer Financing fee": "Taxa Financing",
+    "ShippingChargeback": "Chargeback frete",
+    "RefundCommission": "Comissão devolvida",
+    "ClosingFee": "Taxa de fechamento",
+    "Subscription Fee": "Assinatura",
+}
 MARKETPLACE_ID_BR = "A2Q3Y263D00KWC"
 HISTORICO_HEADER = [
     "amazon-order-id", "merchant-order-id", "purchase-date", "order-status",
@@ -301,6 +313,21 @@ def _to_int(value):
         return 0
 
 
+def _parse_money(value):
+    """Converte valor monetário, inclusive formato BR ('1.234,56' / '-20,05')."""
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        return float(text.replace(".", "").replace(",", "."))
+    except ValueError:
+        return 0.0
+
+
 def summarise_orders(header, rows):
     """Agrega pedidos: totais do mês, por dia e por produto (ASIN). Exclui cancelados."""
     idx = {name: i for i, name in enumerate(header)}
@@ -408,21 +435,82 @@ def build_sales_rows(header, rows):
     return sales_rows
 
 
-def append_sales_sheet(wb, period_text, header, rows):
+def parse_settlement_fees(set_texts):
+    """Reduz os settlements a {order-id: {taxa: valor}}.
+
+    Considera só linhas com pedido + item + SKU (deixando de fora taxas de
+    armazenagem, assinatura, publicidade etc.) e deduplica por linha, pois um
+    mesmo período de settlement pode vir em vários relatórios complementares.
+    Valores negativos = custo pago; positivos = devolução/ajuste.
+    """
+    fees_by_order = {}
+    seen = set()
+    for text in set_texts or []:
+        header, rows = parse_flat_file(text)
+        idx = {name: i for i, name in enumerate(header)}
+        oid_i = idx.get("order-id")
+        item_i = idx.get("order-item-code")
+        desc_i = idx.get("amount-description")
+        amt_i = idx.get("amount")
+        sku_i = idx.get("sku")
+        if None in (oid_i, item_i, desc_i, amt_i, sku_i):
+            continue
+        for row in rows:
+            oid = _cell(row, oid_i).strip()
+            item = _cell(row, item_i).strip()
+            sku = _cell(row, sku_i).strip()
+            desc = _cell(row, desc_i).strip()
+            raw_amt = _cell(row, amt_i).strip()
+            if not (oid and item and sku and desc and raw_amt):
+                continue
+            sig = (oid, item, desc, raw_amt)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            valor = _parse_money(raw_amt)
+            if valor == 0:
+                continue
+            fees_by_order.setdefault(oid, defaultdict(float))[desc] += valor
+    fees = {oid: dict(d) for oid, d in fees_by_order.items()}
+    n_pedidos = len(fees)
+    n_tipos = len({desc for f in fees.values() for desc in f})
+    log.info("Taxas do settlement: %d pedidos com taxa (%d tipos)",
+             n_pedidos, n_tipos)
+    return fees
+
+
+def append_sales_sheet(wb, period_text, header, rows, fees_by_order=None):
+    fees_by_order = fees_by_order or {}
+    fee_descs = sorted({d for f in fees_by_order.values() for d in f},
+                       key=lambda d: SETTLEMENT_FEE_LABELS.get(d, d))
+    n_fee = len(fee_descs)
+    ncols = 7 + n_fee + (1 if n_fee else 0)
     ws = wb.create_sheet(title="Todas as Vendas")
-    ncols = 7
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
     cell = ws.cell(row=1, column=1,
                    value=f"Todas as vendas realizadas — {period_text}")
     cell.font = Font(bold=True, size=12)
     sales_header = ["ID do Pedido", "Data da Compra", "Valor Pago",
                     "Estado", "Tipo de Pagamento", "Unidades", "Itens"]
-    for col, text in enumerate(sales_header, start=1):
+    fee_labels = [SETTLEMENT_FEE_LABELS.get(d, d) for d in fee_descs]
+    if n_fee:
+        fee_labels.append("Total Taxas Amazon")
+    for col, text in enumerate(sales_header + fee_labels, start=1):
         ws.cell(row=2, column=col, value=text).font = Font(bold=True)
     for order_id, data, valor, estado, pagamento, unidades, itens in build_sales_rows(header, rows):
-        ws.append([order_id, data, valor, estado, pagamento, unidades, itens])
+        row_values = [order_id, data, valor, estado, pagamento, unidades, itens]
+        fees = fees_by_order.get(order_id, {})
+        for desc in fee_descs:
+            row_values.append(round(fees.get(desc, 0.0), 2))
+        if n_fee:
+            row_values.append(round(sum(fees.get(d, 0.0) for d in fee_descs), 2))
+        ws.append(row_values)
         ws.cell(row=ws.max_row, column=3).number_format = "#,##0.00"
         ws.cell(row=ws.max_row, column=2).number_format = "DD/MM/YYYY HH:MM"
+        for col_idx in range(7 + 1, ncols + 1):
+            ws.cell(row=ws.max_row, column=col_idx).number_format = "#,##0.00"
+        if n_fee:
+            ws.cell(row=ws.max_row, column=ncols).font = Font(bold=True)
     for col_idx in range(1, ncols + 1):
         width = 14
         for cells in ws.iter_rows(min_col=col_idx, max_col=col_idx):
@@ -489,7 +577,7 @@ def append_summary_sheet(wb, period_text, summary):
 
 INSTRUCTIONS_LINE = [
     ("COMO GERAR O RELATÓRIO MENSAL", ""),
-    ("Pasta", "/home/valdelin/Work/amazon-inventory"),
+    ("Pasta", "<USERHOME>/Work/amazon-inventory"),
     ("Comando", ".venv/bin/python inventario.py --mensal"),
     ("Atualizar sem rede (cache)",
      ".venv/bin/python inventario.py --update  — reconstrói a planilha dos dados salvos no último --mensal"),
@@ -513,7 +601,15 @@ INSTRUCTIONS_LINE = [
     ("SIGNIFICADO DAS ABAS", ""),
     ("  Inventario", "listagens ativas do vendedor (SKU, ASIN, preço, estoque, status)"),
     ("  Vendas Mensais", "agregado por SKU: unidades, pedidos, bruto, desconto, líquido + linha TOTAL"),
+    ("  Todas as Vendas", "detalhe por pedido + colunas de taxas Amazon (do settlement) e Total Taxas"),
     ("  Instruções", "este guia de uso do script"),
+    ("", ""),
+    ("TAXAS AMAZON (SETTLEMENT)", ""),
+    ("Fonte", "relatório de settlement da Amazon (GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE_V2)"),
+    ("Significado", "negativo = custo pago pela venda; positivo = devolução/ajuste (ex.: comissão devolvida)"),
+    ("Junção", "por ID do pedido — pedidos com 2 SKUs somam as taxas dos itens na linha"),
+    ("Limite", "settlements ficam retidos ~90 dias na SP-API; meses antigos podem sair sem colunas de taxa"),
+    ("Fora do escopo", "armazenagem, assinatura e publicidade não são taxas por venda e ficam de fora"),
     ("", ""),
     ("PRÓXIMA FUNCIONALIDADE — BAIXAR NOTAS FISCAIS (NF-e)", ""),
     ("Status", "em planejamento — ainda não implementada"),
@@ -603,19 +699,61 @@ def fetch_mensal_data(private_key, timeout_min, start, end):
     data_end = f"{end.isoformat()}T23:59:59Z"
     ord_text = fetch_report_text(ORDER_TYPE_MONTHLY, private_key, timeout_min,
                                  data_start, data_end)
-    return inv_text, ord_text
+    log.info("=== TAXAS (SETTLEMENT) ===")
+    set_texts = fetch_settlement_texts(private_key)
+    return inv_text, ord_text, set_texts
+
+
+def fetch_settlement_texts(private_key):
+    """Baixa os relatórios de settlement disponíveis (taxas por venda).
+
+    A Amazon gera o settlement sozinha (~ a cada 2 semanas) e o relatório fica
+    retido por ~90 dias; aqui apenas consultamos e baixamos o que existe.
+    """
+    marketplace_name = os.environ.get("SP_API_DEFAULT_MARKETPLACE", "BR")
+    marketplace = getattr(Marketplaces, marketplace_name)
+    reports = Reports(marketplace=marketplace)
+    texts = []
+    try:
+        next_token = None
+        while True:
+            kwargs = {"reportTypes": [SETTLEMENT_TYPE], "pageSize": 100,
+                      "processingStatuses": ["DONE"]}
+            if next_token:
+                kwargs = {"nextToken": next_token}
+            resp = _api_get("getReports", reports.get_reports, **kwargs)
+            payload = resp.payload or {}
+            items = payload.get("reports") or []
+            done = [r for r in items if r.get("reportDocumentId")]
+            log.info("Settlement: %d documento(s) disponíveis", len(done))
+            for rep in done:
+                doc_payload = _api_get(
+                    "getReportDocument", reports.get_report_document,
+                    rep["reportDocumentId"]).payload
+                texts.append(fetch_document(doc_payload, private_key))
+                time.sleep(0.25)
+            next_token = payload.get("NextToken") or payload.get("nextToken")
+            if not next_token or not done:
+                break
+    finally:
+        reports.close()
+    if not texts:
+        log.info("Nenhum settlement disponível (ou falta o papel Finance, "
+                 "ou o período saiu da retenção de ~90 dias).")
+    return texts
 
 
 def cache_path(start, end):
     return CACHE_DIR / f"cache_mensal_{end.strftime('%Y%m')}{CACHE_EXT}"
 
 
-def save_cache(start, end, inv_text, ord_text):
+def save_cache(start, end, inv_text, ord_text, set_texts):
     payload = {
         "start": start.isoformat(),
         "end": end.isoformat(),
         "inventario": inv_text,
         "pedidos": ord_text,
+        "settlements": set_texts or [],
     }
     CACHE_DIR.mkdir(exist_ok=True)
     path = cache_path(start, end)
@@ -635,25 +773,29 @@ def load_cache(start, end):
     cache_start = date.fromisoformat(payload["start"])
     cache_end = date.fromisoformat(payload["end"])
     log.info("Cache lido: %s a %s (%s)", cache_start, cache_end, path)
-    return cache_start, cache_end, payload["inventario"], payload["pedidos"]
+    return (cache_start, cache_end, payload["inventario"], payload["pedidos"],
+            payload.get("settlements", []))
 
 
-def build_mensal_wb(inv_text, ord_text, start, end):
+def build_mensal_wb(inv_text, ord_text, start, end, set_texts=None):
     header, rows = parse_flat_file(inv_text)
     oheader, orows = parse_flat_file(ord_text)
     return build_wb_from_rows(start, end, oheader, orows,
-                              inv_header=header, inv_rows=rows)
+                              inv_header=header, inv_rows=rows,
+                              settlements=set_texts)
 
 
 def build_wb_from_rows(start, end, ord_header, ord_rows,
-                       inv_header=None, inv_rows=None):
+                       inv_header=None, inv_rows=None, settlements=None):
     wb = Workbook()
     if inv_header is not None:
         append_sheet(wb, "Inventario", inv_header, inv_rows)
     summary = summarise_orders(ord_header, ord_rows)
     period_text = f"{start.strftime('%d/%m/%Y')} a {end.strftime('%d/%m/%Y')}"
     append_summary_sheet(wb, period_text, summary)
-    append_sales_sheet(wb, period_text, ord_header, ord_rows)
+    fees = parse_settlement_fees(settlements)
+    append_sales_sheet(wb, period_text, ord_header, ord_rows,
+                       fees_by_order=fees)
     append_instructions_sheet(wb)
     return wb
 
@@ -777,9 +919,10 @@ def historico_cache_path(start, end):
     return CACHE_DIR / f"cache_historico_{end.strftime('%Y%m')}{CACHE_EXT}"
 
 
-def save_historico_cache(start, end, header, rows):
+def save_historico_cache(start, end, header, rows, set_texts=None):
     payload = {"start": start.isoformat(), "end": end.isoformat(),
-               "header": header, "rows": rows}
+               "header": header, "rows": rows,
+               "settlements": set_texts or []}
     CACHE_DIR.mkdir(exist_ok=True)
     path = historico_cache_path(start, end)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -798,7 +941,8 @@ def load_historico_cache(start, end):
     cache_start = date.fromisoformat(payload["start"])
     cache_end = date.fromisoformat(payload["end"])
     log.info("Cache histórico lido: %s a %s (%s)", cache_start, cache_end, path)
-    return cache_start, cache_end, payload["header"], payload["rows"]
+    return (cache_start, cache_end, payload["header"], payload["rows"],
+            payload.get("settlements", []))
 
 
 def mensal_default_output(end):
@@ -848,12 +992,16 @@ def main():
         log.info("Janela de dados: %s a %s", start, end)
         hp = historico_cache_path(start, end)
         if hp.is_file():
-            _, _, header, rows = load_historico_cache(start, end)
-            wb = build_wb_from_rows(start, end, header, rows)
+            _, _, header, rows, set_texts = load_historico_cache(start, end)
+            wb = build_wb_from_rows(start, end, header, rows,
+                                    settlements=set_texts)
         else:
             header, rows = fetch_historical_rows(start, end)
-            save_historico_cache(start, end, header, rows)
-            wb = build_wb_from_rows(start, end, header, rows)
+            log.info("=== TAXAS (SETTLEMENT) ===")
+            set_texts = fetch_settlement_texts(private_key)
+            save_historico_cache(start, end, header, rows, set_texts)
+            wb = build_wb_from_rows(start, end, header, rows,
+                                    settlements=set_texts)
         out_path = args.out or historico_default_output(end)
         save_workbook(wb, out_path)
         print(out_path)
@@ -863,12 +1011,16 @@ def main():
         start, end = resolve_window(args.start, args.end)
         log.info("Janela de dados: %s a %s", start, end)
         if args.update:
-            _, _, inv_text, ord_text = load_cache(start, end)
-            wb = build_mensal_wb(inv_text, ord_text, start, end)
+            _, _, inv_text, ord_text, set_texts = load_cache(start, end)
+            wb = build_mensal_wb(inv_text, ord_text, start, end,
+                                 set_texts=set_texts)
         else:
-            inv_text, ord_text = fetch_mensal_data(private_key, args.timeout_min, start, end)
-            save_cache(start, end, inv_text, ord_text)
-            wb = build_mensal_wb(inv_text, ord_text, start, end)
+            inv_text, ord_text, set_texts = fetch_mensal_data(
+                private_key, args.timeout_min, start, end
+            )
+            save_cache(start, end, inv_text, ord_text, set_texts)
+            wb = build_mensal_wb(inv_text, ord_text, start, end,
+                                 set_texts=set_texts)
         out_path = args.out or mensal_default_output(end)
         save_workbook(wb, out_path)
         print(out_path)

@@ -77,8 +77,23 @@ Baixa o inventário atual + as vendas do mês e grava `relatorio_mensal_<mês>_<
 |-----|----------|
 | **Inventario** | Listagens ativas (SKU, ASIN, preço, estoque, status) |
 | **Vendas Mensais** | Agregado por SKU (unidades, pedidos, bruto, desconto, líquido) + linha TOTAL |
-| **Todas as Vendas** | Detalhe por pedido (id, data, valor, estado, pagamento) |
+| **Todas as Vendas** | Detalhe por pedido (id, data, valor, estado, pagamento) + colunas de taxas Amazon |
 | **Instruções** | Guia de uso embutido na planilha |
+
+## Taxas Amazon por venda (settlement)
+
+As colunas de taxas na aba **Todas as Vendas** vêm do relatório de settlement
+(`GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE_V2`), que a Amazon gera sozinha
+(~ a cada 2 semanas). Cada tipo de taxa vira uma coluna (Comissão, FBA por
+unidade, Financing, chargeback, etc.) somada por ID do pedido, além de
+**Total Taxas Amazon**.
+
+- **Sinal**: negativo = custo pago; positivo = devolução/ajuste (ex.: comissão devolvida).
+- **Junção**: por `order-id` — pedidos com 2 SKUs somam as taxas dos itens na linha.
+- **Limite**: settlements ficam retidos ~90 dias na SP-API; meses antigos (>~3 meses)
+  saem **sem** colunas de taxa. Os dados ficam no cache (`settlements`), então o
+  `--update` reconstrói com as taxas salvas.
+- **Fora do escopo**: armazenagem, assinatura e publicidade não são taxas por venda.
 
 ### Reconstruir sem rede (cache)
 
